@@ -12,7 +12,6 @@ import { track } from "@/lib/analytics/events";
 import { cn } from "@/lib/cn";
 
 const DEFAULT_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const ICS_DAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
 
 interface EditableShift {
   clockIn: string;
@@ -22,41 +21,21 @@ interface EditableShift {
 interface EditableDay {
   dateOrLabel: string;
   shifts: EditableShift[];
+  reminder?: string;
 }
 
 function blankShift(): EditableShift {
   return { clockIn: "", clockOut: "", breakMinutes: "" };
 }
 function defaultDays(): EditableDay[] {
-  return DEFAULT_LABELS.slice(0, 5).map((label) => ({ dateOrLabel: label, shifts: [blankShift()] }));
-}
-
-function pad(value: number) {
-  return String(value).padStart(2, "0");
-}
-
-function localIcsDate(date: Date) {
-  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}T${pad(date.getHours())}${pad(date.getMinutes())}00`;
-}
-
-function utcIcsDate(date: Date) {
-  return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
-}
-
-function nextOccurrence(dayIndex: number, time: string) {
-  const [hours, minutes] = time.split(":").map(Number);
-  const now = new Date();
-  const target = new Date(now);
-  const jsDay = dayIndex === 6 ? 0 : dayIndex + 1;
-  const delta = (jsDay - now.getDay() + 7) % 7;
-  target.setDate(now.getDate() + delta);
-  target.setHours(hours, minutes, 0, 0);
-  if (target <= now) target.setDate(target.getDate() + 7);
-  return target;
+  return DEFAULT_LABELS.slice(0, 5).map((label) => ({ dateOrLabel: label, shifts: [blankShift()], reminder: "" }));
 }
 
 const timeInput =
   "cf-tabular w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface-solid)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-accent-violet focus:ring-2 focus:ring-accent-violet/30";
+
+const reminderInput =
+  "w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--surface-solid)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] focus:border-accent-violet focus:ring-2 focus:ring-accent-violet/20";
 
 export function TimeCardCalculator() {
   const [days, setDays] = useState<EditableDay[]>(defaultDays);
@@ -64,7 +43,6 @@ export function TimeCardCalculator() {
   const [rate, setRate] = useState<number | "">("");
   const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [loadedTemplate, setLoadedTemplate] = useState(false);
-  const [reminderAdded, setReminderAdded] = useState(false);
 
   // Restore a saved template + preferences on first mount (local-only).
   useEffect(() => {
@@ -73,7 +51,7 @@ export function TimeCardCalculator() {
     if (p.rememberSchedule) {
       const tpl = readJSON<{ days: EditableDay[]; threshold: number | "" } | null>(STORAGE_KEYS.timecardTemplate, null);
       if (tpl?.days?.length) {
-        setDays(tpl.days);
+        setDays(tpl.days.map((day) => ({ ...day, reminder: day.reminder ?? "" })));
         if (tpl.threshold !== undefined) setThreshold(tpl.threshold);
         setLoadedTemplate(true);
         track("local_template_loaded", { calculator_id: "time_card" });
@@ -104,6 +82,11 @@ export function TimeCardCalculator() {
       ),
     );
   }
+
+  function updateReminder(di: number, reminder: string) {
+    setDays((prev) => prev.map((day, i) => (i === di ? { ...day, reminder } : day)));
+  }
+
   function addShift(di: number) {
     setDays((prev) => prev.map((d, i) => (i === di ? { ...d, shifts: [...d.shifts, blankShift()] } : d)));
     track("shift_added", { calculator_id: "time_card" });
@@ -121,7 +104,7 @@ export function TimeCardCalculator() {
     setDays((prev) => {
       if (prev.length >= 7) return prev;
       const label = DEFAULT_LABELS[prev.length] ?? `Day ${prev.length + 1}`;
-      return [...prev, { dateOrLabel: label, shifts: [blankShift()] }];
+      return [...prev, { dateOrLabel: label, shifts: [blankShift()], reminder: "" }];
     });
   }
   function reset() {
@@ -153,77 +136,30 @@ export function TimeCardCalculator() {
 
   const shareText = () => {
     const lines = ["CHRONOFORGE · WEEKLY WORK SCHEDULE", "────────────────────────────"];
+
     days.forEach((day, di) => {
       const completed = day.shifts.filter((shift) => shift.clockIn && shift.clockOut);
-      if (!completed.length) return;
+      const reminder = day.reminder?.trim();
+      if (!completed.length && !reminder) return;
+
       lines.push(day.dateOrLabel.toUpperCase());
       completed.forEach((shift, si) => {
         const breakMinutes = shift.breakMinutes === "" ? 0 : Number(shift.breakMinutes);
         const shiftLabel = completed.length > 1 ? `Shift ${si + 1} · ` : "";
         lines.push(`${shiftLabel}${shift.clockIn} → ${shift.clockOut}  ·  ${breakMinutes} min break`);
       });
+
       const daily = result.dailyDurations[di];
-      if (daily) lines.push(`Worked: ${daily.formatted}`);
+      if (completed.length && daily) lines.push(`Worked: ${daily.formatted}`);
+      if (reminder) lines.push(`Reminder: ${reminder}`);
       lines.push("");
     });
+
     lines.push("WEEKLY SUMMARY");
     lines.push(`Total ${formatHhMm(result.weeklyTotalMinutes)}  ·  Regular ${result.regularHours}h  ·  Overtime ${result.overtimeHours}h`);
     return lines.join("\n").trim();
   };
 
-  function addCalendarReminders() {
-    const events: string[] = [];
-    const stamp = utcIcsDate(new Date());
-
-    days.forEach((day, di) => {
-      day.shifts.forEach((shift, si) => {
-        if (!shift.clockIn || !shift.clockOut || di > 6) return;
-        const start = nextOccurrence(di, shift.clockIn);
-        const end = new Date(start);
-        const [outHours, outMinutes] = shift.clockOut.split(":").map(Number);
-        end.setHours(outHours, outMinutes, 0, 0);
-        if (end <= start) end.setDate(end.getDate() + 1);
-        const breakMinutes = shift.breakMinutes === "" ? 0 : Number(shift.breakMinutes);
-        const description = `Work schedule from ChronoForge. Break: ${breakMinutes} minutes.`;
-
-        events.push(
-          [
-            "BEGIN:VEVENT",
-            `UID:chronoforge-${di}-${si}-${start.getTime()}@chronoforge`,
-            `DTSTAMP:${stamp}`,
-            `DTSTART:${localIcsDate(start)}`,
-            `DTEND:${localIcsDate(end)}`,
-            `RRULE:FREQ=WEEKLY;BYDAY=${ICS_DAYS[di]}`,
-            `SUMMARY:Work schedule · ${day.dateOrLabel}`,
-            `DESCRIPTION:${description}`,
-            "BEGIN:VALARM",
-            "TRIGGER:-PT15M",
-            "ACTION:DISPLAY",
-            `DESCRIPTION:Your ${day.dateOrLabel} shift starts in 15 minutes.`,
-            "END:VALARM",
-            "END:VEVENT",
-          ].join("\r\n"),
-        );
-      });
-    });
-
-    if (!events.length) return;
-    const calendar = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//ChronoForge//Work Schedule//EN", "CALSCALE:GREGORIAN", ...events, "END:VCALENDAR", ""].join("\r\n");
-    const blob = new Blob([calendar], { type: "text/calendar;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "chronoforge-work-schedule.ics";
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-    setReminderAdded(true);
-    track("calendar_reminder_downloaded", { calculator_id: "time_card" });
-    window.setTimeout(() => setReminderAdded(false), 2000);
-  }
-
-  const hasCompletedShift = days.some((day) => day.shifts.some((shift) => shift.clockIn && shift.clockOut));
   const perDay = result.dailyDurations;
 
   return (
@@ -269,9 +205,29 @@ export function TimeCardCalculator() {
                   </div>
                 ))}
               </div>
-              <button type="button" onClick={() => addShift(di)} className="cf-no-print mt-2 text-xs font-semibold text-accent-violet hover:underline">
-                + Add shift
-              </button>
+
+              <div className="cf-no-print mt-2 flex items-center justify-between gap-3">
+                <button type="button" onClick={() => addShift(di)} className="text-xs font-semibold text-accent-violet hover:underline">
+                  + Add shift
+                </button>
+                <span className="text-[11px] text-[var(--text-muted)]">Optional note · included when shared</span>
+              </div>
+
+              <div className="cf-no-print mt-2 rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-muted)]/40 p-2.5">
+                <label htmlFor={`reminder-${di}`} className="mb-1.5 block text-xs font-semibold text-[var(--text-secondary)]">
+                  Reminder / note
+                </label>
+                <textarea
+                  id={`reminder-${di}`}
+                  value={day.reminder ?? ""}
+                  onChange={(e) => updateReminder(di, e.target.value)}
+                  className={reminderInput}
+                  rows={2}
+                  maxLength={240}
+                  placeholder="e.g. Team meeting at 4 PM, bring access card, submit timesheet before leaving…"
+                  aria-label={`${day.dateOrLabel} reminder or note`}
+                />
+              </div>
             </div>
           ))}
         </div>
@@ -313,29 +269,20 @@ export function TimeCardCalculator() {
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <CopyButton getText={copyText} getShareText={shareText} calculatorId="time_card" />
               <PrintButton calculatorId="time_card" />
-              <button
-                type="button"
-                onClick={addCalendarReminders}
-                disabled={!hasCompletedShift}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:border-accent-violet/60 hover:text-accent-violet disabled:cursor-not-allowed disabled:opacity-40"
-                title="Add weekly calendar events with a reminder 15 minutes before each shift"
-              >
-                {reminderAdded ? "Calendar ready ✓" : "Add reminders"}
-              </button>
               <button type="button" onClick={saveTemplate} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-3 py-1.5 text-sm font-semibold text-white shadow-glow">
                 Save locally
               </button>
             </div>
           </ActionsBar>
           <p className="cf-no-print mt-2 text-xs text-[var(--text-muted)]">
-            Add reminders creates a private weekly calendar file with a 15-minute alert before each completed shift.
+            Share result includes your completed shifts, day notes, weekly totals, and the ChronoForge calculator link. Hourly rate and estimated pay are not shared.
           </p>
         </GlassCard>
 
         <GlassCard className="cf-no-print p-4">
           <Toggle label="Remember my schedule on this device" checked={prefs.rememberSchedule} onChange={setRemember} />
           <p className="mt-2 text-xs text-[var(--text-muted)]">
-            Saved only in this browser — never uploaded. Your hourly rate is not stored.
+            Saved only in this browser — never uploaded. Your hourly rate is not stored. Saved reminders stay with your local schedule.
           </p>
         </GlassCard>
       </div>
