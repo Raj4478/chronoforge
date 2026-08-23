@@ -18,6 +18,12 @@ jobs:
     name: Performance, accessibility, SEO
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Lighthouse's SEO audit expects the tested pages to be crawlable.
+      # Normal preview/dev builds remain noindex; this override applies only
+      # inside this isolated CI job.
+      NEXT_PUBLIC_ALLOW_INDEX: "true"
+      NEXT_PUBLIC_SITE_URL: "http://127.0.0.1:3000"
 
     steps:
       - name: Checkout
