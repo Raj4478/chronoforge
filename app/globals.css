@@ -109,6 +109,34 @@ body {
   .cf-no-print {
     display: none !important;
   }
+
+  /* Day reminders are normally part of interactive UI, but a non-empty
+     reminder is meaningful schedule content and should be included on paper. */
+  .cf-no-print:has(textarea[id^="reminder-"]:not(:placeholder-shown)) {
+    display: block !important;
+    margin-top: 8px !important;
+    padding: 8px 10px !important;
+    border: 1px solid #d1d5db !important;
+    background: #fff !important;
+  }
+
+  .cf-no-print:has(textarea[id^="reminder-"]:not(:placeholder-shown)) label {
+    color: #374151 !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+  }
+
+  textarea[id^="reminder-"] {
+    min-height: 0 !important;
+    resize: none !important;
+    overflow: visible !important;
+    border: 0 !important;
+    background: transparent !important;
+    color: #111827 !important;
+    padding: 3px 0 0 !important;
+    box-shadow: none !important;
+  }
+
   body {
     background: #fff;
     color: #000;
