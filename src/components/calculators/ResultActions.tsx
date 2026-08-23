@@ -48,24 +48,24 @@ export function CopyButton({
 
   async function share() {
     const summary = getShareText?.() ?? getText();
-    // Keep the shared URL clean: never expose calculator inputs in query/hash data.
+    // Keep the URL clean and put the summary + URL in one text payload.
+    // Some share targets drop `text` when a separate `url` field is supplied,
+    // which previously caused them to share only the ChronoForge link.
     const url = `${window.location.origin}${window.location.pathname}`;
-    const text = `${summary}\n\n${url}`;
+    const text = `${summary}\n\nOpen in ChronoForge:\n${url}`;
 
     if (typeof navigator.share === "function") {
       try {
         await navigator.share({
-          title: "ChronoForge result",
-          text: summary,
-          url,
+          title: "ChronoForge",
+          text,
         });
         setShareState("shared");
         track("share_result", { calculator_id: calculatorId, share_method: "native" });
         window.setTimeout(() => setShareState("idle"), 1600);
         return;
       } catch (error) {
-        // A user cancelling the native share sheet is not a failure and should
-        // not unexpectedly copy anything to their clipboard.
+        // Cancelling the native share sheet should not copy anything.
         if (error instanceof DOMException && error.name === "AbortError") return;
       }
     }
