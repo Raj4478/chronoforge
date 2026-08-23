@@ -27,6 +27,7 @@ export type AnalyticsEvent =
   | "local_template_loaded"
   | "copy_result"
   | "share_result"
+  | "calendar_reminder_downloaded"
   | "print_result"
   | "related_tool_clicked"
   | "time_format_changed"
