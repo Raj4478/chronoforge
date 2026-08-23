@@ -26,6 +26,7 @@ export type AnalyticsEvent =
   | "local_template_saved"
   | "local_template_loaded"
   | "copy_result"
+  | "share_result"
   | "print_result"
   | "related_tool_clicked"
   | "time_format_changed"
@@ -38,6 +39,7 @@ const SAFE_KEYS = new Set([
   "has_break",
   "shift_count",
   "visitor_country",
+  "share_method",
 ]);
 
 function sanitize(params: GtagParams): GtagParams {
