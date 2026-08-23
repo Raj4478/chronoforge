@@ -1,0 +1,56 @@
+name: Unpack source files
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/unpack-source.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct uploaded source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            bootstrap-src/source.part00 \
+            bootstrap-xz/source.part01 \
+            bootstrap-src/source.part02 \
+            bootstrap-src/source.part03 \
+            bootstrap-src/source.part04 \
+            bootstrap-src/source.part05 \
+            > /tmp/chronoforge.b64
+          base64 -d /tmp/chronoforge.b64 > /tmp/chronoforge.tar.xz
+          mkdir -p /tmp/chronoforge-unpacked
+          tar -xJf /tmp/chronoforge.tar.xz -C /tmp/chronoforge-unpacked
+
+          find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .github -exec rm -rf {} +
+          cp -a /tmp/chronoforge-unpacked/chronoforge/. .
+
+          # The transport archive intentionally omitted package-lock.json to keep
+          # the one-time bootstrap small. Recreate a deterministic lockfile from
+          # the uploaded package.json for Vercel/npm CI installs.
+          npm install --package-lock-only --ignore-scripts
+
+          # Remove all one-time transport/bootstrap artifacts. The final branch
+          # contains normal source files only, suitable for direct Vercel import.
+          rm -rf bootstrap bootstrap-xz bootstrap-src .github
+
+      - name: Commit normal source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'chore: upload ChronoForge source files'
+          git push origin main
